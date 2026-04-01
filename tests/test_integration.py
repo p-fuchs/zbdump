@@ -10,10 +10,11 @@ import pytest
 from click.testing import CliRunner
 from testcontainers.postgres import PostgresContainer
 
-from zbdump import zbdump
+from zbdump import DatabaseConnectionProtocol, zbdump
 
-
-SEED_SQL_PATH = Path(__file__).resolve().parents[1] / "docker" / "initdb" / "001_fixture.sql"
+SEED_SQL_PATH = (
+    Path(__file__).resolve().parents[1] / "docker" / "initdb" / "001_fixture.sql"
+)
 
 
 def _replace_database_name(database_url: str, database_name: str) -> str:
@@ -44,6 +45,21 @@ def _restore_dump(database_url: str, dump_path: Path) -> None:
         connection.commit()
 
 
+def _seed_database(database_url: str) -> None:
+    with psycopg.connect(database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(SEED_SQL_PATH.read_text(encoding="utf-8"))
+        connection.commit()
+
+
+def _count_rows(database_url: str) -> int:
+    with psycopg.connect(database_url) as connection:
+        with connection.cursor() as cursor:
+            return cursor.execute(
+                "SELECT COUNT(*) FROM public.dump_fixture"
+            ).fetchone()[0]
+
+
 @pytest.fixture(scope="module")
 def postgres_container() -> Iterator[PostgresContainer]:
     with PostgresContainer(
@@ -59,10 +75,7 @@ def postgres_container() -> Iterator[PostgresContainer]:
 @pytest.fixture(scope="module")
 def seeded_database_url(postgres_container: PostgresContainer) -> str:
     database_url = postgres_container.get_connection_url(driver=None)
-    with psycopg.connect(database_url) as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(SEED_SQL_PATH.read_text(encoding="utf-8"))
-        connection.commit()
+    _seed_database(database_url)
     return database_url
 
 
@@ -79,7 +92,28 @@ def restored_database_url(postgres_container: PostgresContainer) -> Iterator[str
     finally:
         with psycopg.connect(admin_url, autocommit=True) as connection:
             with connection.cursor() as cursor:
-                cursor.execute(f'DROP DATABASE IF EXISTS "{database_name}" WITH (FORCE)')
+                cursor.execute(
+                    f'DROP DATABASE IF EXISTS "{database_name}" WITH (FORCE)'
+                )
+
+
+@pytest.fixture()
+def source_database_url(postgres_container: PostgresContainer) -> Iterator[str]:
+    admin_url = _replace_database_name(
+        postgres_container.get_connection_url(driver=None),
+        "postgres",
+    )
+    database_name = f"source_{uuid4().hex[:8]}"
+    database_url = _create_database(admin_url, database_name)
+    _seed_database(database_url)
+    try:
+        yield database_url
+    finally:
+        with psycopg.connect(admin_url, autocommit=True) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f'DROP DATABASE IF EXISTS "{database_name}" WITH (FORCE)'
+                )
 
 
 def test_dump_with_data_round_trips(
@@ -188,3 +222,59 @@ def test_dump_missing_table_fails_with_clear_error(
     assert result.exit_code == 1
     assert 'Table "missing_table" does not exist.' in result.output
     assert not output_file.exists()
+
+
+def test_dump_with_more_than_fifty_batches_of_rows_round_trips(
+    source_database_url: str,
+    restored_database_url: str,
+    tmp_path: Path,
+) -> None:
+    extra_row_count = DatabaseConnectionProtocol.ROW_FETCH_BATCH_SIZE * 50
+    output_file = tmp_path / "dump_fixture_large.sql"
+
+    with psycopg.connect(source_database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.executemany(
+                """
+                INSERT INTO public.dump_fixture (
+                    tenant_id,
+                    external_uuid,
+                    email,
+                    display_name,
+                    is_active
+                ) VALUES (%s, %s, %s, %s, %s)
+                """,
+                (
+                    (
+                        1000 + index,
+                        uuid4(),
+                        f"bulk-{index}@example.com",
+                        f"Bulk Row {index}",
+                        index % 2 == 0,
+                    )
+                    for index in range(1, extra_row_count + 1)
+                ),
+            )
+        connection.commit()
+
+    expected_row_count = _count_rows(source_database_url)
+    assert expected_row_count == extra_row_count + 3
+
+    result = CliRunner().invoke(
+        zbdump,
+        [
+            "--database_url",
+            source_database_url,
+            "--output_file",
+            str(output_file),
+            "--inserts_with_column_names",
+            "dump_fixture",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+
+    _restore_dump(restored_database_url, output_file)
+
+    restored_row_count = _count_rows(restored_database_url)
+    assert restored_row_count == expected_row_count

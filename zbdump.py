@@ -1,13 +1,15 @@
+from collections.abc import Generator, Iterable
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
 from types import TracebackType
+from typing import Any, TextIO
 
 import click
-from dataclasses import dataclass
-from contextlib import contextmanager
-from typing import Any, Generator, Iterable, List, TextIO
-from pathlib import Path
 import psycopg
 from psycopg import sql
 from psycopg.types.json import Json, Jsonb
+
 
 @dataclass
 class TableColumnInfo:
@@ -19,6 +21,7 @@ class TableColumnInfo:
     is_identity: bool
     identity_generation: str | None
 
+
 @dataclass
 class TableIndexInfo:
     index_name: str
@@ -28,9 +31,9 @@ class TableIndexInfo:
 @dataclass
 class TableInfo:
     table_name: str
-    columns: List[TableColumnInfo]
-    indices: List[TableIndexInfo]
-    primary_key_columns: List[str]
+    columns: list[TableColumnInfo]
+    indices: list[TableIndexInfo]
+    primary_key_columns: list[str]
 
 
 class TableNotFoundError(Exception):
@@ -44,8 +47,10 @@ class DatabaseConnectionProtocol:
 
     def __init__(self, connection: psycopg.Connection) -> None:
         self._connection = connection
-    
-    def _read_table_index_data(self, table_name: str, cursor: psycopg.Cursor) -> List[TableIndexInfo]:
+
+    def _read_table_index_data(
+        self, table_name: str, cursor: psycopg.Cursor
+    ) -> list[TableIndexInfo]:
         result = cursor.execute(
             """
             SELECT indexname, indexdef
@@ -53,18 +58,14 @@ class DatabaseConnectionProtocol:
             WHERE tablename = %s
               AND schemaname = current_schema();
             """,
-            (table_name,)
+            (table_name,),
         ).fetchall()
 
-        return [
-            TableIndexInfo(
-                index_name=row[0],
-                index_def=row[1]
-            )
-            for row in result
-        ]
-    
-    def _read_table_columns_data(self, table_name: str, cursor: psycopg.Cursor) -> List[TableColumnInfo]:
+        return [TableIndexInfo(index_name=row[0], index_def=row[1]) for row in result]
+
+    def _read_table_columns_data(
+        self, table_name: str, cursor: psycopg.Cursor
+    ) -> list[TableColumnInfo]:
         result = cursor.execute(
             """
             SELECT
@@ -86,7 +87,7 @@ class DatabaseConnectionProtocol:
               AND NOT a.attisdropped
             ORDER BY c.ordinal_position;
             """,
-            (table_name,)
+            (table_name,),
         ).fetchall()
 
         return [
@@ -97,12 +98,14 @@ class DatabaseConnectionProtocol:
                 is_nullable=row[3].lower() == "yes",
                 column_default=row[4],
                 is_identity=row[5].lower() == "yes",
-                identity_generation=row[6]
+                identity_generation=row[6],
             )
             for row in result
         ]
 
-    def _read_primary_key_columns(self, table_name: str, cursor: psycopg.Cursor) -> List[str]:
+    def _read_primary_key_columns(
+        self, table_name: str, cursor: psycopg.Cursor
+    ) -> list[str]:
         result = cursor.execute(
             """
             SELECT kcu.column_name
@@ -116,12 +119,11 @@ class DatabaseConnectionProtocol:
               AND tc.constraint_type = 'PRIMARY KEY'
             ORDER BY kcu.ordinal_position;
             """,
-            (table_name,)
+            (table_name,),
         ).fetchall()
 
         return [row[0] for row in result]
 
-    
     def read_table_config(self, table_name: str) -> TableInfo:
         with self._connection.cursor() as cur:
             columns = self._read_table_columns_data(table_name, cur)
@@ -132,13 +134,14 @@ class DatabaseConnectionProtocol:
                 table_name=table_name,
                 columns=columns,
                 indices=self._read_table_index_data(table_name, cur),
-                primary_key_columns=self._read_primary_key_columns(table_name, cur)
+                primary_key_columns=self._read_primary_key_columns(table_name, cur),
             )
 
-    def iter_table_rows(self, table_info: TableInfo) -> Generator[tuple[str, ...], None, None]:
+    def iter_table_rows(
+        self, table_info: TableInfo
+    ) -> Generator[tuple[str, ...], None, None]:
         selected_columns = sql.SQL(", ").join(
-            sql.Identifier(column.column_name)
-            for column in table_info.columns
+            sql.Identifier(column.column_name) for column in table_info.columns
         )
         query = sql.SQL("SELECT {columns} FROM {table_name}").format(
             columns=selected_columns,
@@ -154,7 +157,9 @@ class DatabaseConnectionProtocol:
                 columns=ordered_primary_key_columns
             )
 
-        with self._connection.cursor(name=f"{table_info.table_name}_rows_cursor") as cur:
+        with self._connection.cursor(
+            name=f"{table_info.table_name}_rows_cursor"
+        ) as cur:
             cur.execute(query)
 
             while True:
@@ -181,11 +186,10 @@ class DatabaseConnectionProtocol:
 class DumpFileRenderer:
     def __init__(self, file: TextIO) -> None:
         self._file = file
-    
+
     def render_table_ddl(self, table_info: TableInfo) -> None:
         column_lines = [
-            self._render_column_definition(column)
-            for column in table_info.columns
+            self._render_column_definition(column) for column in table_info.columns
         ]
 
         if table_info.primary_key_columns:
@@ -210,8 +214,7 @@ class DumpFileRenderer:
         include_column_names: bool,
     ) -> None:
         rendered_column_names = ", ".join(
-            self._quote_identifier(column.column_name)
-            for column in table_info.columns
+            self._quote_identifier(column.column_name) for column in table_info.columns
         )
         column_list = f" ({rendered_column_names})" if include_column_names else ""
         overriding_clause = self._render_identity_override_clause(table_info)
@@ -282,21 +285,23 @@ class DumpFileRenderer:
     def from_path(cls, path: Path) -> "DumpFileRenderer":
         file = open(path, "w", encoding="utf-8")
         return cls(file)
-    
+
     def __enter__(self) -> "DumpFileRenderer":
         return self
-    
+
     def __exit__(
         self,
         exc_type: type[BaseException] | None,
         exc_value: BaseException | None,
         traceback: TracebackType | None,
-    ) -> None:        
+    ) -> None:
         self._file.close()
 
 
 @contextmanager
-def get_database_connection(database_url: str) -> Generator[psycopg.Connection, None, None]:
+def get_database_connection(
+    database_url: str,
+) -> Generator[psycopg.Connection, None, None]:
     with psycopg.connect(database_url) as connection:
         connection.read_only = True
         yield connection
@@ -304,33 +309,38 @@ def get_database_connection(database_url: str) -> Generator[psycopg.Connection, 
 
 @click.command()
 @click.option(
-    "--database_url", 
+    "--database_url",
     envvar="DATABASE_URL",
     required=True,
     type=click.STRING,
-    help="Database connection URL, e.g. postgresql://user:pass@host:5432/dbname. If not provided, it will be inferred from the DATABASE_URL environment variable"
+    help="Database connection URL, e.g. postgresql://user:pass@host:5432/dbname. If not provided, it will be inferred from the DATABASE_URL environment variable",
 )
 @click.option(
     "--output_file",
     required=False,
     type=click.Path(),
-    help="Path to the file where the table dump should be stored. Defaults to <table_name>_dump.sql in the current working directory."
+    help="Path to the file where the table dump should be stored. Defaults to <table_name>_dump.sql in the current working directory.",
 )
 @click.option(
     "--inserts_with_column_names",
     is_flag=True,
-    help="Include table data as INSERT statements with explicit column names."
+    help="Include table data as INSERT statements with explicit column names.",
 )
 @click.argument(
     "table",
     required=True,
     type=click.STRING,
 )
-def zbdump(database_url: str, table: str, output_file: Path | None, inserts_with_column_names: bool):
+def zbdump(
+    database_url: str,
+    table: str,
+    output_file: Path | None,
+    inserts_with_column_names: bool,
+):
     """Dump TABLE from the database."""
     if output_file is None:
         output_file = Path(f"{table}_dump.sql").absolute()
-    
+
     with get_database_connection(database_url) as connection:
         connection_protocol = DatabaseConnectionProtocol(connection)
         try:

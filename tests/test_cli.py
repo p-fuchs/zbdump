@@ -33,7 +33,9 @@ def test_cli_uses_default_output_path_when_output_file_is_missing(
         primary_key_columns=["id"],
     )
 
-    monkeypatch.setattr(zbdump_module, "get_database_connection", lambda _: _fake_connection())
+    monkeypatch.setattr(
+        zbdump_module, "get_database_connection", lambda _: _fake_connection()
+    )
     monkeypatch.setattr(
         zbdump_module.DatabaseConnectionProtocol,
         "read_table_config",

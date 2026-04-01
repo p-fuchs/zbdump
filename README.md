@@ -1,122 +1,52 @@
-# zbdump fixture database
+# zbdump
 
-This repository now includes a PostgreSQL 17 fixture database for manual `zbdump` testing.
-It does not change the existing Python dumper. The fixture gives you one table,
-seed data, and several index shapes, including a covering index with `INCLUDE`.
+Tool that mimics MVP functionalities from the `pg_dump`. It allows to dump SQL table to the `.sql` file that recreates it.
 
-## What gets created
+## AI usage
 
-The database contains one table: `public.dump_fixture`.
+To be entirely transparent, I've used AI to develop this script. The tests were entirely written by AI using my implementation plan with testcontainers.
+80% of the script was written manually and it was only polished afterwards with the AI. The workflow was that AI tool generated sql that seeds the database
+with pretty complex table `docker/initdb/001_fixture.sql` and then I was developing the script that was able to handle that. There were also issues that AI
+review caught - for example I haven't really considered `AS IDENTITY` clauses which was pointed out by AI.
 
-It is designed to be useful for dump testing:
+Surprisingly, AI roasted my implementation of being incomplete `pg_dump` and I needed to keep it away from implementing rest of the `pg_dump` features ;))
 
-- primary key and identity column
-- nullable and non-nullable columns
-- scalar types such as `integer`, `bigint`, `numeric`, `boolean`, `uuid`
-- temporal types such as `date`, `time`, `timestamp`, `timestamptz`, `interval`
-- richer types such as `jsonb`, `text[]`, `bytea`, `inet`
-- multiple index types:
-  - unique btree index
-  - expression index
-  - partial covering index with `INCLUDE`
-  - GIN index on `jsonb`
+## Script usage
 
-## Run with Docker Compose
-
-Start the database:
+This project is based on the `uv` python package manager which is present on the students machine.
+To run, this project you simply need to be in the project root and run the:
 
 ```bash
-docker compose up -d
+uv run zbdump.py
 ```
 
-Stop it:
+with any options you need. If you append `--help` you will see whole documentation:
 
 ```bash
-docker compose down
+$ uv run zbdump.py --help
+Usage: zbdump.py [OPTIONS] TABLE
+
+  Dump TABLE from the database.
+
+Options:
+  --database_url TEXT          Database connection URL, e.g.
+                               postgresql://user:pass@host:5432/dbname. If not
+                               provided, it will be inferred from the
+                               DATABASE_URL environment variable  [required]
+  --output_file PATH           Path to the file where the table dump should be
+                               stored. Defaults to <table_name>_dump.sql in
+                               the current working directory.
+  --inserts_with_column_names  Include table data as INSERT statements with
+                               explicit column names.
+  --help                       Show this message and exit.
 ```
 
-Reset the database and rerun the seed scripts:
+Example usage:
 
 ```bash
-docker compose down -v
-docker compose up -d
+$ uv run zbdump.py \
+    --database_url postgresql://zbdump:zbdump@localhost:5432/zbdump_fixture \
+    --output_file dump_fixture.sql \
+    --inserts_with_column_names \
+    dump_fixture
 ```
-
-View logs:
-
-```bash
-docker compose logs -f postgres
-```
-
-## Connection details
-
-- host: `localhost`
-- port: `5432`
-- database: `zbdump_fixture`
-- user: `zbdump`
-- password: `zbdump`
-
-Connection string:
-
-```text
-postgresql://zbdump:zbdump@localhost:5432/zbdump_fixture
-```
-
-## Verify the fixture
-
-Inspect the table:
-
-```bash
-docker compose exec postgres psql -U zbdump -d zbdump_fixture -c '\d+ public.dump_fixture'
-```
-
-Check the row count:
-
-```bash
-docker compose exec postgres psql -U zbdump -d zbdump_fixture -c 'SELECT COUNT(*) FROM public.dump_fixture;'
-```
-
-List indexes:
-
-```bash
-docker compose exec postgres psql -U zbdump -d zbdump_fixture -c "SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'dump_fixture' ORDER BY indexname;"
-```
-
-Show the seeded rows:
-
-```bash
-docker compose exec postgres psql -U zbdump -d zbdump_fixture -c 'SELECT id, tenant_id, external_uuid, email, display_name FROM public.dump_fixture ORDER BY id;'
-```
-
-## Example dump commands
-
-Generate schema and indexes only:
-
-```bash
-source .venv/bin/activate
-python zbdump.py --database_url postgresql://zbdump:zbdump@localhost:5432/zbdump_fixture dump_fixture
-```
-
-Generate schema, data `INSERT`s with explicit column names, and indexes:
-
-```bash
-source .venv/bin/activate
-python zbdump.py --database_url postgresql://zbdump:zbdump@localhost:5432/zbdump_fixture --inserts_with_column_names dump_fixture
-```
-
-## Run integration tests
-
-The integration suite starts PostgreSQL 17 with `testcontainers`, seeds the fixture schema,
-executes the dumper, and restores the generated SQL into a fresh database.
-
-```bash
-source .venv/bin/activate
-PYTHONPATH=$PWD uv run pytest tests/test_integration.py
-```
-
-## Notes
-
-- The SQL files in `/docker-entrypoint-initdb.d/` run only when PostgreSQL initializes a fresh data directory.
-- Because Compose uses a named volume, normal restarts keep the same data.
-- If you want the initial seed SQL to run again, use `docker compose down -v`.
-- If you test the dumper, the table name to dump is `dump_fixture`.
