@@ -139,6 +139,7 @@ def test_dump_with_data_round_trips(
     assert 'CREATE TABLE "dump_fixture"' in dump_text
     assert 'PRIMARY KEY ("id")' in dump_text
     assert dump_text.count('INSERT INTO "dump_fixture"') == 3
+    assert 'INSERT INTO "dump_fixture" ("id", "tenant_id"' in dump_text
     assert "CREATE UNIQUE INDEX dump_fixture_external_uuid_idx" in dump_text
 
     _restore_dump(restored_database_url, output_file)
@@ -170,12 +171,12 @@ def test_dump_with_data_round_trips(
     } <= index_names
 
 
-def test_dump_without_inserts_excludes_table_data(
+def test_dump_without_column_names_still_includes_table_data(
     seeded_database_url: str,
     restored_database_url: str,
     tmp_path: Path,
 ) -> None:
-    output_file = tmp_path / "dump_fixture_schema_only.sql"
+    output_file = tmp_path / "dump_fixture_without_column_names.sql"
     result = CliRunner().invoke(
         zbdump,
         [
@@ -190,7 +191,9 @@ def test_dump_without_inserts_excludes_table_data(
     assert result.exit_code == 0, result.output
     dump_text = output_file.read_text(encoding="utf-8")
     assert 'CREATE TABLE "dump_fixture"' in dump_text
-    assert 'INSERT INTO "dump_fixture"' not in dump_text
+    assert dump_text.count('INSERT INTO "dump_fixture"') == 3
+    assert 'INSERT INTO "dump_fixture" OVERRIDING SYSTEM VALUE VALUES' in dump_text
+    assert 'INSERT INTO "dump_fixture" ("id", "tenant_id"' not in dump_text
 
     _restore_dump(restored_database_url, output_file)
 
@@ -200,7 +203,7 @@ def test_dump_without_inserts_excludes_table_data(
                 "SELECT COUNT(*) FROM public.dump_fixture"
             ).fetchone()[0]
 
-    assert row_count == 0
+    assert row_count == 3
 
 
 def test_dump_missing_table_fails_with_clear_error(
@@ -222,6 +225,72 @@ def test_dump_missing_table_fails_with_clear_error(
     assert result.exit_code == 1
     assert 'Table "missing_table" does not exist.' in result.output
     assert not output_file.exists()
+
+
+def test_dump_uses_current_schema_when_same_table_name_exists_elsewhere(
+    seeded_database_url: str,
+    restored_database_url: str,
+    tmp_path: Path,
+) -> None:
+    output_file = tmp_path / "dump_fixture_current_schema.sql"
+
+    with psycopg.connect(seeded_database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("CREATE SCHEMA shadow")
+            cursor.execute(
+                """
+                CREATE TABLE shadow.dump_fixture (
+                    id text PRIMARY KEY,
+                    shadow_only text NOT NULL
+                )
+                """
+            )
+            cursor.execute(
+                """
+                INSERT INTO shadow.dump_fixture (id, shadow_only)
+                VALUES ('shadow-id', 'shadow-value')
+                """
+            )
+        connection.commit()
+
+    result = CliRunner().invoke(
+        zbdump,
+        [
+            "--database_url",
+            seeded_database_url,
+            "--output_file",
+            str(output_file),
+            "dump_fixture",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    dump_text = output_file.read_text(encoding="utf-8")
+    assert '"shadow_only"' not in dump_text
+    assert '"id" bigint GENERATED ALWAYS AS IDENTITY NOT NULL' in dump_text
+    assert 'INSERT INTO "dump_fixture" OVERRIDING SYSTEM VALUE VALUES' in dump_text
+
+    _restore_dump(restored_database_url, output_file)
+
+    with psycopg.connect(restored_database_url) as connection:
+        with connection.cursor() as cursor:
+            restored_columns = {
+                row[0]
+                for row in cursor.execute(
+                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = 'dump_fixture'
+                    """
+                ).fetchall()
+            }
+            row_count = cursor.execute(
+                "SELECT COUNT(*) FROM public.dump_fixture"
+            ).fetchone()[0]
+
+    assert "shadow_only" not in restored_columns
+    assert row_count == 3
 
 
 def test_dump_with_more_than_fifty_batches_of_rows_round_trips(
@@ -278,3 +347,80 @@ def test_dump_with_more_than_fifty_batches_of_rows_round_trips(
 
     restored_row_count = _count_rows(restored_database_url)
     assert restored_row_count == expected_row_count
+
+
+def test_dump_simple_table_with_column_names_without_identity_generation(
+    source_database_url: str,
+    restored_database_url: str,
+    tmp_path: Path,
+) -> None:
+    output_file = tmp_path / "simple_fixture.sql"
+
+    with psycopg.connect(source_database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                CREATE TABLE public.simple_fixture (
+                    id integer PRIMARY KEY,
+                    name text NOT NULL,
+                    is_active boolean NOT NULL DEFAULT true
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX simple_fixture_name_idx
+                ON public.simple_fixture (name)
+                """
+            )
+            cursor.execute(
+                """
+                INSERT INTO public.simple_fixture (id, name, is_active)
+                VALUES
+                    (1, 'Alice', true),
+                    (2, 'Bob', false)
+                """
+            )
+        connection.commit()
+
+    result = CliRunner().invoke(
+        zbdump,
+        [
+            "--database_url",
+            source_database_url,
+            "--output_file",
+            str(output_file),
+            "--inserts_with_column_names",
+            "simple_fixture",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    dump_text = output_file.read_text(encoding="utf-8")
+    assert 'CREATE TABLE "simple_fixture"' in dump_text
+    assert 'PRIMARY KEY ("id")' in dump_text
+    assert 'CREATE INDEX simple_fixture_name_idx' in dump_text
+    assert 'INSERT INTO "simple_fixture" ("id", "name", "is_active") VALUES' in dump_text
+    assert "OVERRIDING SYSTEM VALUE" not in dump_text
+
+    _restore_dump(restored_database_url, output_file)
+
+    with psycopg.connect(restored_database_url) as connection:
+        with connection.cursor() as cursor:
+            row_count = cursor.execute(
+                "SELECT COUNT(*) FROM public.simple_fixture"
+            ).fetchone()[0]
+            index_names = {
+                row[0]
+                for row in cursor.execute(
+                    """
+                    SELECT indexname
+                    FROM pg_indexes
+                    WHERE schemaname = 'public'
+                      AND tablename = 'simple_fixture'
+                    """
+                ).fetchall()
+            }
+
+    assert row_count == 2
+    assert {"simple_fixture_pkey", "simple_fixture_name_idx"} <= index_names

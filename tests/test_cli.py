@@ -41,6 +41,11 @@ def test_cli_uses_default_output_path_when_output_file_is_missing(
         "read_table_config",
         lambda self, table_name: table_info,
     )
+    monkeypatch.setattr(
+        zbdump_module.DatabaseConnectionProtocol,
+        "iter_table_rows",
+        lambda self, table_info: iter([("1",)]),
+    )
 
     runner = CliRunner()
     with runner.isolated_filesystem():
@@ -52,4 +57,6 @@ def test_cli_uses_default_output_path_when_output_file_is_missing(
         output_path = Path("dump_fixture_dump.sql").absolute()
         assert result.exit_code == 0, result.output
         assert output_path.exists()
-        assert 'CREATE TABLE "dump_fixture"' in output_path.read_text(encoding="utf-8")
+        dump_text = output_path.read_text(encoding="utf-8")
+        assert 'CREATE TABLE "dump_fixture"' in dump_text
+        assert 'INSERT INTO "dump_fixture" VALUES (1);' in dump_text

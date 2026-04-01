@@ -79,10 +79,14 @@ class DatabaseConnectionProtocol:
             FROM information_schema.columns c
             JOIN pg_catalog.pg_class cls
                 ON cls.relname = c.table_name
+            JOIN pg_catalog.pg_namespace ns
+                ON ns.oid = cls.relnamespace
+                AND ns.nspname = c.table_schema
             JOIN pg_catalog.pg_attribute a
                 ON a.attrelid = cls.oid
                 AND a.attname = c.column_name
             WHERE c.table_name = %s
+              AND c.table_schema = current_schema()
               AND a.attnum > 0
               AND NOT a.attisdropped
             ORDER BY c.ordinal_position;
@@ -350,13 +354,12 @@ def zbdump(
 
         with DumpFileRenderer.from_path(output_file) as renderer:
             renderer.render_table_ddl(table_info)
-            if inserts_with_column_names:
-                table_rows = connection_protocol.iter_table_rows(table_info)
-                renderer.render_table_data(
-                    table_info,
-                    table_rows,
-                    include_column_names=True,
-                )
+            table_rows = connection_protocol.iter_table_rows(table_info)
+            renderer.render_table_data(
+                table_info,
+                table_rows,
+                include_column_names=inserts_with_column_names,
+            )
             renderer.render_table_indexes(table_info)
 
 
