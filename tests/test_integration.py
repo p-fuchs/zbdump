@@ -399,8 +399,10 @@ def test_dump_simple_table_with_column_names_without_identity_generation(
     dump_text = output_file.read_text(encoding="utf-8")
     assert 'CREATE TABLE "simple_fixture"' in dump_text
     assert 'PRIMARY KEY ("id")' in dump_text
-    assert 'CREATE INDEX simple_fixture_name_idx' in dump_text
-    assert 'INSERT INTO "simple_fixture" ("id", "name", "is_active") VALUES' in dump_text
+    assert "CREATE INDEX simple_fixture_name_idx" in dump_text
+    assert (
+        'INSERT INTO "simple_fixture" ("id", "name", "is_active") VALUES' in dump_text
+    )
     assert "OVERRIDING SYSTEM VALUE" not in dump_text
 
     _restore_dump(restored_database_url, output_file)
