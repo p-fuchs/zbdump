@@ -1,0 +1,1 @@
+Prefer Serena tools for navigation and editing. Python code uses type annotations and simple CLI-oriented structure. README should document concrete run commands and connection details. Docker-related changes live at repo root (Dockerfile, compose.yaml) and SQL initialization scripts live under docker/initdb/.

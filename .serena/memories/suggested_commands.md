@@ -1,0 +1,1 @@
+Use the repo .venv when running Python locally: `source .venv/bin/activate`. Useful commands: `python zbdump.py --help`, `docker compose up -d`, `docker compose down`, `docker compose down -v && docker compose up -d`, `docker compose logs -f postgres`, `docker compose exec postgres psql -U zbdump -d zbdump_fixture -c '\''\\d+ public.dump_fixture'\''`.

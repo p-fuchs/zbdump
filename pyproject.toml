@@ -1,0 +1,17 @@
+[project]
+name = "zbdump"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "click>=8.3.1",
+    "psycopg>=3.3.3",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.20.0",
+    "pytest>=9.0.2",
+    "testcontainers[postgres]>=4.14.2",
+]

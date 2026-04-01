@@ -1,0 +1,1 @@
+When finishing a task, validate the concrete runtime path when possible. For fixture/database tasks here, prefer `docker compose config`, `docker compose up -d`, `docker compose ps`, and targeted `psql` verification queries against zbdump_fixture.

@@ -1,0 +1,20 @@
+services:
+  postgres:
+    build: .
+    container_name: zbdump-pg17
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: zbdump_fixture
+      POSTGRES_USER: zbdump
+      POSTGRES_PASSWORD: zbdump
+    volumes:
+      - pg17_fixture_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zbdump -d zbdump_fixture"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pg17_fixture_data:
