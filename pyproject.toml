@@ -1,7 +1,7 @@
 [project]
 name = "zbdump"
 version = "0.1.0"
-description = "Add your description here"
+description = "Small PostgreSQL table dumper for a single table"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

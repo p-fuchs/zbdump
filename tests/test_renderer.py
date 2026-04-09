@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from io import StringIO
 
-from zbdump import DumpFileRenderer, TableColumnInfo, TableInfo
+from zbdump import DumpFileRenderer, TableColumnInfo, TableIndexInfo, TableInfo
 
 
 def _build_table_info() -> TableInfo:
@@ -29,6 +29,29 @@ def test_render_table_indexes_skips_output_when_only_primary_key_exists() -> Non
     renderer = DumpFileRenderer(buffer)
 
     renderer.render_table_indexes(_build_table_info())
+
+    assert buffer.getvalue() == ""
+
+
+def test_render_table_indexes_skips_primary_key_backing_index_with_custom_name() -> (
+    None
+):
+    buffer = StringIO()
+    renderer = DumpFileRenderer(buffer)
+    table_info = TableInfo(
+        table_name="dump_fixture",
+        columns=_build_table_info().columns,
+        indices=[
+            TableIndexInfo(
+                index_name="custom_named_pk",
+                index_def="CREATE UNIQUE INDEX custom_named_pk ON public.dump_fixture USING btree (id)",
+                is_primary_key_backing=True,
+            )
+        ],
+        primary_key_columns=["id"],
+    )
+
+    renderer.render_table_indexes(table_info)
 
     assert buffer.getvalue() == ""
 

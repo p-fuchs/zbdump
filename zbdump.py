@@ -26,6 +26,7 @@ class TableColumnInfo:
 class TableIndexInfo:
     index_name: str
     index_def: str
+    is_primary_key_backing: bool = False
 
 
 @dataclass
@@ -53,15 +54,35 @@ class DatabaseConnectionProtocol:
     ) -> list[TableIndexInfo]:
         result = cursor.execute(
             """
-            SELECT indexname, indexdef
-            FROM pg_indexes
-            WHERE tablename = %s
-              AND schemaname = current_schema();
+            SELECT
+                idx.relname AS indexname,
+                pg_get_indexdef(i.indexrelid) AS indexdef,
+                COALESCE(con.contype = 'p', false) AS is_primary_key_backing
+            FROM pg_catalog.pg_class tbl
+            JOIN pg_catalog.pg_namespace ns
+                ON ns.oid = tbl.relnamespace
+            JOIN pg_catalog.pg_index i
+                ON i.indrelid = tbl.oid
+            JOIN pg_catalog.pg_class idx
+                ON idx.oid = i.indexrelid
+            LEFT JOIN pg_catalog.pg_constraint con
+                ON con.conindid = i.indexrelid
+                AND con.contype = 'p'
+            WHERE tbl.relname = %s
+              AND ns.nspname = current_schema()
+            ORDER BY idx.relname;
             """,
             (table_name,),
         ).fetchall()
 
-        return [TableIndexInfo(index_name=row[0], index_def=row[1]) for row in result]
+        return [
+            TableIndexInfo(
+                index_name=row[0],
+                index_def=row[1],
+                is_primary_key_backing=row[2],
+            )
+            for row in result
+        ]
 
     def _read_table_columns_data(
         self, table_name: str, cursor: psycopg.Cursor
@@ -236,11 +257,10 @@ class DumpFileRenderer:
             self._file.write("\n")
 
     def render_table_indexes(self, table_info: TableInfo) -> None:
-        primary_key_index_name = f"{table_info.table_name}_pkey"
         index_definitions = [
             self._terminate_sql_statement(index.index_def)
             for index in table_info.indices
-            if index.index_name != primary_key_index_name
+            if not index.is_primary_key_backing
         ]
 
         if not index_definitions:
@@ -322,7 +342,7 @@ def get_database_connection(
 @click.option(
     "--output_file",
     required=False,
-    type=click.Path(),
+    type=click.Path(path_type=Path),
     help="Path to the file where the table dump should be stored. Defaults to <table_name>_dump.sql in the current working directory.",
 )
 @click.option(

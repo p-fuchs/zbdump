@@ -8,7 +8,7 @@ from uuid import uuid4
 import psycopg
 import pytest
 from click.testing import CliRunner
-from testcontainers.postgres import PostgresContainer
+from testcontainers.postgres import PostgresContainer  # type: ignore[import-untyped]
 
 from zbdump import DatabaseConnectionProtocol, zbdump
 
@@ -55,9 +55,9 @@ def _seed_database(database_url: str) -> None:
 def _count_rows(database_url: str) -> int:
     with psycopg.connect(database_url) as connection:
         with connection.cursor() as cursor:
-            return cursor.execute(
-                "SELECT COUNT(*) FROM public.dump_fixture"
-            ).fetchone()[0]
+            row = cursor.execute("SELECT COUNT(*) FROM public.dump_fixture").fetchone()
+            assert row is not None
+            return row[0]
 
 
 @pytest.fixture(scope="module")
@@ -146,9 +146,9 @@ def test_dump_with_data_round_trips(
 
     with psycopg.connect(restored_database_url) as connection:
         with connection.cursor() as cursor:
-            row_count = cursor.execute(
-                "SELECT COUNT(*) FROM public.dump_fixture"
-            ).fetchone()[0]
+            row = cursor.execute("SELECT COUNT(*) FROM public.dump_fixture").fetchone()
+            assert row is not None
+            row_count = row[0]
             index_names = {
                 row[0]
                 for row in cursor.execute(
@@ -199,9 +199,9 @@ def test_dump_without_column_names_still_includes_table_data(
 
     with psycopg.connect(restored_database_url) as connection:
         with connection.cursor() as cursor:
-            row_count = cursor.execute(
-                "SELECT COUNT(*) FROM public.dump_fixture"
-            ).fetchone()[0]
+            row = cursor.execute("SELECT COUNT(*) FROM public.dump_fixture").fetchone()
+            assert row is not None
+            row_count = row[0]
 
     assert row_count == 3
 
@@ -287,7 +287,9 @@ def test_dump_uses_current_schema_when_same_table_name_exists_elsewhere(
             }
             row_count = cursor.execute(
                 "SELECT COUNT(*) FROM public.dump_fixture"
-            ).fetchone()[0]
+            ).fetchone()
+            assert row_count is not None
+            row_count = row_count[0]
 
     assert "shadow_only" not in restored_columns
     assert row_count == 3
@@ -409,9 +411,11 @@ def test_dump_simple_table_with_column_names_without_identity_generation(
 
     with psycopg.connect(restored_database_url) as connection:
         with connection.cursor() as cursor:
-            row_count = cursor.execute(
+            row = cursor.execute(
                 "SELECT COUNT(*) FROM public.simple_fixture"
-            ).fetchone()[0]
+            ).fetchone()
+            assert row is not None
+            row_count = row[0]
             index_names = {
                 row[0]
                 for row in cursor.execute(
@@ -426,3 +430,61 @@ def test_dump_simple_table_with_column_names_without_identity_generation(
 
     assert row_count == 2
     assert {"simple_fixture_pkey", "simple_fixture_name_idx"} <= index_names
+
+
+def test_dump_skips_custom_named_primary_key_backing_index(
+    source_database_url: str,
+    restored_database_url: str,
+    tmp_path: Path,
+) -> None:
+    output_file = tmp_path / "custom_named_pk_fixture.sql"
+
+    with psycopg.connect(source_database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                CREATE TABLE public.custom_named_pk_fixture (
+                    id integer NOT NULL,
+                    payload text NOT NULL,
+                    CONSTRAINT custom_named_pk PRIMARY KEY (id)
+                )
+                """
+            )
+            cursor.execute(
+                """
+                INSERT INTO public.custom_named_pk_fixture (id, payload)
+                VALUES (1, 'alpha'), (2, 'beta')
+                """
+            )
+        connection.commit()
+
+    result = CliRunner().invoke(
+        zbdump,
+        [
+            "--database_url",
+            source_database_url,
+            "--output_file",
+            str(output_file),
+            "custom_named_pk_fixture",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+
+    _restore_dump(restored_database_url, output_file)
+
+    with psycopg.connect(restored_database_url) as connection:
+        with connection.cursor() as cursor:
+            index_names = {
+                row[0]
+                for row in cursor.execute(
+                    """
+                    SELECT indexname
+                    FROM pg_indexes
+                    WHERE schemaname = 'public'
+                      AND tablename = 'custom_named_pk_fixture'
+                    """
+                ).fetchall()
+            }
+
+    assert index_names == {"custom_named_pk_fixture_pkey"}
