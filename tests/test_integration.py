@@ -432,7 +432,7 @@ def test_dump_simple_table_with_column_names_without_identity_generation(
     assert {"simple_fixture_pkey", "simple_fixture_name_idx"} <= index_names
 
 
-def test_dump_skips_custom_named_primary_key_backing_index(
+def test_dump_preserves_custom_primary_key_constraint_name_and_skips_duplicate_index(
     source_database_url: str,
     restored_database_url: str,
     tmp_path: Path,
@@ -470,6 +470,8 @@ def test_dump_skips_custom_named_primary_key_backing_index(
     )
 
     assert result.exit_code == 0, result.output
+    dump_text = output_file.read_text(encoding="utf-8")
+    assert 'CONSTRAINT "custom_named_pk" PRIMARY KEY ("id")' in dump_text
 
     _restore_dump(restored_database_url, output_file)
 
@@ -487,4 +489,4 @@ def test_dump_skips_custom_named_primary_key_backing_index(
                 ).fetchall()
             }
 
-    assert index_names == {"custom_named_pk_fixture_pkey"}
+    assert index_names == {"custom_named_pk"}

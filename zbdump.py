@@ -35,6 +35,7 @@ class TableInfo:
     columns: list[TableColumnInfo]
     indices: list[TableIndexInfo]
     primary_key_columns: list[str]
+    primary_key_constraint_name: str | None = None
 
 
 class TableNotFoundError(Exception):
@@ -130,10 +131,10 @@ class DatabaseConnectionProtocol:
 
     def _read_primary_key_columns(
         self, table_name: str, cursor: psycopg.Cursor
-    ) -> list[str]:
+    ) -> tuple[str | None, list[str]]:
         result = cursor.execute(
             """
-            SELECT kcu.column_name
+            SELECT tc.constraint_name, kcu.column_name
             FROM information_schema.table_constraints tc
             JOIN information_schema.key_column_usage kcu
                 ON tc.constraint_name = kcu.constraint_name
@@ -147,7 +148,10 @@ class DatabaseConnectionProtocol:
             (table_name,),
         ).fetchall()
 
-        return [row[0] for row in result]
+        if not result:
+            return None, []
+
+        return result[0][0], [row[1] for row in result]
 
     def read_table_config(self, table_name: str) -> TableInfo:
         with self._connection.cursor() as cur:
@@ -155,11 +159,16 @@ class DatabaseConnectionProtocol:
             if not columns:
                 raise TableNotFoundError(table_name)
 
+            primary_key_constraint_name, primary_key_columns = (
+                self._read_primary_key_columns(table_name, cur)
+            )
+
             return TableInfo(
                 table_name=table_name,
                 columns=columns,
                 indices=self._read_table_index_data(table_name, cur),
-                primary_key_columns=self._read_primary_key_columns(table_name, cur),
+                primary_key_columns=primary_key_columns,
+                primary_key_constraint_name=primary_key_constraint_name,
             )
 
     def iter_table_rows(
@@ -222,7 +231,12 @@ class DumpFileRenderer:
                 self._quote_identifier(column_name)
                 for column_name in table_info.primary_key_columns
             )
-            column_lines.append(f"PRIMARY KEY ({primary_key_columns})")
+            constraint_prefix = ""
+            if table_info.primary_key_constraint_name is not None:
+                constraint_prefix = f"CONSTRAINT {self._quote_identifier(table_info.primary_key_constraint_name)} "
+            column_lines.append(
+                f"{constraint_prefix}PRIMARY KEY ({primary_key_columns})"
+            )
 
         rendered_columns = ",\n".join(f"    {line}" for line in column_lines)
         self._file.write(
